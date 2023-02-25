@@ -1,0 +1,130 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <mpi.h>
+
+#define WIDTH 800
+#define HEIGHT 800
+#define MAX_ITERATIONS 5000
+
+/* Define complex number struct */
+typedef struct {
+    double real;
+    double imag;
+} Complex;
+
+/* Function to calculate the number of iterations for a given point in the complex plane */
+int mandelbrot(Complex c) {
+    Complex z = {0, 0};
+    int iterations = 0;
+    while (z.real * z.real + z.imag * z.imag <= 4 && iterations < MAX_ITERATIONS) {
+        double temp = z.real * z.real - z.imag * z.imag + c.real;
+        z.imag = 2 * z.real * z.imag + c.imag;
+        z.real = temp;
+        iterations++;
+    }
+    return iterations;
+}
+
+/* Function to map a pixel coordinate to a point in the complex plane */
+Complex map_pixel_to_point(int x, int y) {
+    Complex point;
+    point.real = (4.0 * x / WIDTH) - 2.0;
+    point.imag = (4.0 * y / HEIGHT) - 2.0;
+    return point;
+}
+
+/* Function to compute a block of rows in the Mandelbrot set */
+void compute_block(int start_row, int end_row, int *output) {
+    int row, col, index;
+    for (row = start_row; row < end_row; row++) {
+        for (col = 0; col < WIDTH; col++) {
+            Complex point = map_pixel_to_point(col, row);
+            index = (row - start_row) * WIDTH + col;
+            output[index] = mandelbrot(point);
+        }
+    }
+}
+
+/* Function to perform dynamic task assignment */
+void dynamic_assignment(int num_procs) {
+    int rank, num_tasks, num_received, task_id, task_start, task_end;
+    MPI_Status status;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if (rank == 0) {
+        num_tasks = HEIGHT;
+        for (int i = 1; i < num_procs; i++) {
+            task_id = i - 1;
+            task_start = task_id * HEIGHT / (num_procs - 1);
+            task_end = (task_id + 1) * HEIGHT / (num_procs - 1);
+            MPI_Send(&task_start, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
+            MPI_Send(&task_end, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
+        }
+        int *output = (int *)malloc(sizeof(int) * WIDTH * HEIGHT);
+        for (int i = 1; i < num_procs; i++) {
+            MPI_Recv(output, WIDTH * HEIGHT, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
+            int source = status.MPI_SOURCE;
+            task_id = source - 1;
+            task_start = task_id * HEIGHT / (num_procs - 1);
+            task_end = (task_id + 1) * HEIGHT / (num_procs - 1);
+            int *task_output = output + (task_start * WIDTH);
+            for (int j = task_start; j < task_end; j++) {
+                MPI_Recv(task_output, WIDTH, MPI_INT, source, 0, MPI_COMM_WORLD, &status);
+                task_output += WIDTH;
+            }
+        }
+        /* Save output image */
+    } else {
+        MPI_Recv(&task_start, 1,MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+MPI_Recv(&task_end, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+int *output = (int *)malloc(sizeof(int) * WIDTH * (task_end - task_start));
+compute_block(task_start, task_end, output);
+MPI_Send(output, WIDTH * (task_end - task_start), MPI_INT, 0, 0, MPI_COMM_WORLD);
+}
+}
+
+/* Function to perform static task assignment */
+void static_assignment(int num_procs) {
+int rank, task_id, task_start, task_end;
+MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+if (rank == 0) {
+for (int i = 1; i < num_procs; i++) {
+task_id = i - 1;
+task_start = task_id * HEIGHT / (num_procs - 1);
+task_end = (task_id + 1) * HEIGHT / (num_procs - 1);
+int *output = (int *)malloc(sizeof(int) * WIDTH * (task_end - task_start));
+compute_block(task_start, task_end, output);
+MPI_Send(output, WIDTH * (task_end - task_start), MPI_INT, i, 0, MPI_COMM_WORLD);
+}
+int *output = (int )malloc(sizeof(int) * WIDTH * HEIGHT);
+for (int i = 1; i < num_procs; i++) {
+MPI_Status status;
+MPI_Recv(output + ((i - 1) * (HEIGHT / (num_procs - 1))) * WIDTH, WIDTH * (HEIGHT / (num_procs - 1)), MPI_INT, i, 0, MPI_COMM_WORLD, &status);
+}
+/ Save output image */
+} else {
+MPI_Status status;
+MPI_Recv(&task_start, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+MPI_Recv(&task_end, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+int *output = (int *)malloc(sizeof(int) * WIDTH * (task_end - task_start));
+compute_block(task_start, task_end, output);
+MPI_Send(output, WIDTH * (task_end - task_start), MPI_INT, 0, 0, MPI_COMM_WORLD);
+}
+}
+
+int main(int argc, char **argv) {
+int rank, num_procs;
+MPI_Init(&argc, &argv);
+MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+double start_time, end_time;
+start_time = MPI_Wtime();
+dynamic_assignment(num_procs);
+end_time = MPI_Wtime();
+printf("Dynamic assignment took %f seconds\n", end_time - start_time);
+start_time = MPI_Wtime();
+static_assignment(num_procs);
+end_time = MPI_Wtime();
+printf("Static assignment took %f seconds\n", end_time - start_time);
+MPI_Finalize();
+return 0;
+}
